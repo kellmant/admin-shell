@@ -7,7 +7,7 @@ credentials
 .renvrc
 .s3cfg
 .sessionkey
-.tmux.conf
+#.tmux.conf
 .vim*
 KEYSTORE*
 .cache
