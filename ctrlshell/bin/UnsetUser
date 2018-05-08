@@ -1,0 +1,46 @@
+#!/bin/bash
+#
+# nothing fancy
+# just run the commands to get it launched
+#
+. ./tested
+
+
+
+source /efs/deploy/InterdimensionalPortalService
+
+
+if [ -z "${1}" ] ; then
+    echo -e " ${BWhite} $0 ${CVAL}<buddy>${NC}"
+    echo "${buildobj} $0"
+    exit
+fi
+
+
+
+if [ ! -d "/efs/home/${1}/${buildobj}/.aws" ] ; then
+    echo -e " ${BWhite} $0 ${CALERT}${1}${NC}"
+    echo "${buildobj} auth not found for ${1}"
+    echo
+    echo "cleaned up ${1} for ${buildobj}"
+    exit
+fi
+
+jobstart "$$"
+trap "jobtrace '$$'" 0 1 2 3 6
+
+msgbus " cleaning up old files for ${buildobj}"
+echo " cleaning out ${buildobj} auth for ${1}"
+rm -rf /efs/home/${1}/${buildobj}/.aws
+
+msgbus " removing aws access"
+echo " removing access credentials"
+accesskey=$(aws iam list-access-keys --user-name ${1}_${buildobj} | jq -r '.AccessKeyMetadata[].AccessKeyId')
+aws iam delete-access-key --access-key $accesskey --user-name ${1}_${buildobj}
+
+aws iam delete-user-policy --user-name ${1}_${buildobj} --policy-name ${1}-${buildobj}-policy
+
+aws iam delete-user --user-name ${1}_${buildobj} > ${iamcred}/${1}.id
+
+
+msgbus "${buildobj} removed from ${1}"

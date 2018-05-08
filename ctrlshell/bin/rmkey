@@ -1,0 +1,29 @@
+#!/bin/bash
+#set -eo pipefail
+set -a
+source /.IPS
+
+cnt=0
+INKEYS=($(etcdctl ls --sort -r $SKEY/${1}))
+for (( i=0; i<${#INKEYS[@]}; i++ )) ; do
+    tfile="${INKEYS[$i]}"
+    element=$(echo ${tfile} | cut -d '/' -f 3-)
+    vals=$(etcdctl get $tfile 2>/dev/null)
+    if [ $? -eq 0 ] ; then
+        (( cnt++ ))
+        echo "${cnt} ${element} => ${vals}"
+    else
+        continue
+    fi
+done
+u_confirm "Remove $cnt keys for $1" 
+if [ $? -eq 1 ] ; then
+msgbus "$cnt keys were spared by $BUD just now in /${1} ${NC}"
+exit 1
+else
+etcdctl rm -r $SKEY/${1}
+msgbus "$cnt keys gone at that the hands of $BUD in /${1} ${NC}" 
+fi
+exit 0
+
+

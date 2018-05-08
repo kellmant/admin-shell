@@ -1,0 +1,43 @@
+#!/bin/bash
+
+source /efs/deploy/.corebuild
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+cd $DIR
+. ./tested
+
+jobstart "$$"
+trap "jobtrace '$$'" 0 1 2 3 6
+echo "our buildstate is $buildstage for $buildobj"
+echo "in overlay network $overlay"
+
+mkdir -p $DIR/certs
+cp /efs/ca/root/*.cert.pem ${DIR}/certs/
+rm -rf ${DIR}/certs/ca-chain.cert.pem
+cp -r /efs/deploy/env/.ssh ${DIR}/ctrlshell/
+cp -f /efs/deploy/env/.sessionkey ${DIR}/ctrlshell/
+cp -f /efs/deploy/InterdimensionalPortalService ${DIR}/.IPS
+chmod -R go-rwx ctrlshell/.ssh
+docker rmi registry:5000/${buildobj}:${buildstage}
+docker build -t registry:5000/${buildobj}:${buildstage} .
+docker push registry:5000/${buildobj}:${buildstage}
+docker rmi registry:5000/${buildobj}:${buildstage}
+rm -rf ${DIR}/certs
+rm -rf ${DIR}/.IPS
+rm -rf ${DIR}/ctrlshell/.ssh
+rm -rf ${DIR}/ctrlshell/.sessionkey
+
+fleetctl submit ${buildobj}@.service
+
+sleep 5
+
+
+LOADSERVICE=($(ls *.service))
+CORELIST=($(get_corehosts))
+
+for l in "${LOADSERVICE[@]}" ; do
+	unitsvc=$(echo $l | cut -d '.' -f 1)
+	for c in "${CORELIST[@]}" ; do
+		fleetctl start ${unitsvc}${c}
+		sleep 14
+	done
+done

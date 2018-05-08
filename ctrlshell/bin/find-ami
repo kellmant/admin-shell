@@ -1,0 +1,13 @@
+#!/bin/bash
+#
+
+gwregion="us-east-1"
+
+#appAMI=$(aws ec2 describe-images --region $gwregion --filters Name=description,Values="Amazon Linux AMI 2017.03.0.20170401 x86_64 Minimal HVM EBS" | jq -r '.Images[].ImageId') 
+aws ec2 describe-images --region $gwregion --owners amazon --filters 'Name=name,Values=amzn-ami-hvm-*.x86_64-gp2' 'Name=state,Values=available' | jq -r '.Images | sort_by(.CreationDate) | last(.[]).ImageId'
+#appAMI=$(aws ec2 describe-images --region $gwregion) 
+
+#echo "$appAMI"
+
+exit
+

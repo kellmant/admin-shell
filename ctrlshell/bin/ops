@@ -1,0 +1,44 @@
+#!/bin/bash
+
+if [ -z $1 ] ; then
+fleetctl list-units | grep registry
+fleetctl list-units | grep thesituation
+fleetctl list-units | grep gw
+fleetctl list-units | grep joshua@
+fleetctl list-units | grep hello@
+fleetctl list-units | grep ircd@
+elif [ "$1" == "run" ] ; then
+    fleetctl list-units | grep bucket
+    fleetctl list-units | grep console
+    fleetctl list-units | grep sysdig
+    fleetctl list-units | grep shell
+elif [ "$1" == "user" ] ; then
+    fleetctl list-units | grep irc@
+    fleetctl list-units | grep ninja@
+elif [ "$1" == "media" ] ; then
+    fleetctl list-units | grep plex
+    fleetctl list-units | grep jukebox@
+    echo "=======================>"
+    fleetctl list-units | grep shows
+    fleetctl list-units | grep movies
+    fleetctl list-units | grep sab
+elif [ "$1" == "gw" ] ; then
+   # fleetctl list-units | grep gw@core-a
+   echo -n "core-a => "
+fleetctl journal --lines 2 gw@core-a
+echo
+   # fleetctl list-units | grep gw@core-b
+   echo -n "core-b => "
+fleetctl journal --lines 2 gw@core-b
+echo
+   # fleetctl list-units | grep gw@core-c
+   echo -n "core-c => "
+fleetctl journal --lines 2 gw@core-c
+echo
+elif [ "$1" == "fail" ] ; then
+    fleetctl list-units | grep -v running
+else
+    fleetctl list-units | grep ${1}
+#    fleetctl journal --lines 32 ${1}
+    fi
+

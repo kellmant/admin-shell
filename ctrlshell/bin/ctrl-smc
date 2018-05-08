@@ -1,0 +1,65 @@
+#!/bin/bash
+#
+source /.IPS
+jobstart "$$"
+trap "jobtrace '$$'" 0 1 2 3 6
+
+gw_cf="https://s3.amazonaws.com/CloudFormationTemplate/gwinvpc.json" 
+mg_cf="https://s3.amazonaws.com/CloudFormationTemplate/r80.json"
+cpami_cf="https://s3.amazonaws.com/CloudFormationTemplate/amis.json"
+aws_cf="https://s3.amazonaws.com/CloudFormationTemplate/infrastructure.json"
+mghostname=$(etcdctl get $ipsenv/config_system/hostname) || { mghostname="smc.seclab.fail" ; }
+mghost=$(echo "$mghostname" | cut -d '.' -f 1)
+
+msgbus "${BUDDY} $ipscmd setting up $mghost enviroment. "
+myregion=$(etcdctl get $ipsenv/region) || { myregion="ca-central-1" ; }
+
+keyscan="curl -s $cpami_cf"
+jqscan="jq -r .Mappings.RegionMap.\"$myregion\".R8010BYOL"
+get_ami () {
+    $keyscan | $jqscan
+}
+
+getdef=$(cat ~/bin/config_system)
+declare -A myarray
+        while IFS="=" read -r key value ; do
+            myarray[$key]="$value"
+        done < <(echo "${getdef[@]}")
+
+for key in "${!myarray[@]}" ; do
+    cleanvar=$(echo "${myarray[$key]}" | tr -d '"')
+    $($PUTENV/config_system/$key -d value="${cleanvar}") 2>/dev/null
+done
+
+mgami=$(get_ami)
+mgsize=$(etcdctl get $ipsenv/size) || { mgsize="large" ; }
+vpc=$(aws ec2 describe-vpcs --region $myregion | jq -r '.Vpcs[].VpcId')
+mgadminname=$(etcdctl get $ipsenv/config_system/mgmt_admin_name) || { mgadminname="gwadmin" ; }
+adminpass=$(etcdctl get $ipsenv/config_system/mgmt_admin_passwd) || { adminpass=$(xkcdpass) ; }
+$($PUTENV/region -d value="$myregion") 2>/dev/null
+$($PUTENV/config_system/mgmt_admin_name -d value="$mgadminname") 2>/dev/null
+$($PUTENV/config_system/mgmt_admin_passwd -d value="$adminpass") 2>/dev/null
+$($PUTENV/config_system/hostname -d value="$mghostname") 2>/dev/null
+$($PUTENV/size -d value="$mgsize")  2>/dev/null
+$($PUTENV/vpc -d value="$vpc") 2>/dev/null
+$($PUTENV/AMI -d value="$mgami") 2>/dev/null 
+$($PUTENV/disk -d value="DeviceName=/dev/xvda,Ebs={VolumeSize=100,DeleteOnTermination=true,VolumeType=io1,Iops=900}") 2>/dev/null
+#$($PUTENV/sic -d value="$sic") 2>/dev/null 
+
+
+msgbus "${BUDDY} $ipscmd security management console $mghostname in $myregion vpc $vpc "
+
+descsecgrp=$(aws ec2 describe-security-groups --region $myregion --group-name ${ipscmd}-${SKEY})
+if [ $? -eq 0 ] ; then
+descsecgrp=$(echo ${descsecgrp[@]} | jq -r '.SecurityGroups[].GroupId')
+    echo "scgroup exists $descsecgrp"
+    $($PUTENV/secgroup -d value="$descsecgrp") 2>/dev/null 
+else
+crsecgrp=$(aws ec2 create-security-group --region $myregion --group-name ${ipscmd}-${SKEY} --description "$SKEY" --vpc-id "$vpc" | jq -r .GroupId)
+$($PUTENV/secgroup -d value="$crsecgrp") 2>/dev/null 
+etcdctl set sec/group/${mghost} "$crsecgrp"
+aws ec2 authorize-security-group-ingress --region $myregion --group-id $crsecgrp --protocol all --port 1-65535 --cidr 0.0.0.0/0
+fi
+
+    msgbus "${BUDDY} $ipscmd $mghostname setup complete, run 'ips-mg' to launch it. "
+

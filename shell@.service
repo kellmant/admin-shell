@@ -1,0 +1,38 @@
+[Unit]
+Description=%i service %p 
+
+[Service]
+EnvironmentFile=/etc/environment
+EnvironmentFile=-/efs/deploy/env/%i
+TimeoutStartSec=0
+Restart=always
+RestartSec=2s
+KillMode=none
+
+# PreStart
+ExecStartPre=-/usr/bin/docker stop %p.%i
+ExecStartPre=-/usr/bin/docker kill %p.%i
+ExecStartPre=-/usr/bin/docker rm %p.%i
+ExecStartPre=-/bin/bash -c 'etcdctl set stream "%H | $(date +\"%%a %%r\") | %N container is coming ONLINE "'
+ExecStartPre=-/usr/bin/docker pull registry:5000/%p:latest
+
+# Start
+ExecStart=/usr/bin/docker run --rm -h %p --name %p.%i -v /efs:/efs -v /run/fleet.sock:/var/run/fleet.sock -P registry:5000/%p:latest
+ExecStartPost=-/usr/bin/etcdctl rm fail/%p/%i
+ExecStartPost=-/usr/bin/etcdctl set env/app/%p/proto "https"
+ExecStartPost=-/usr/bin/etcdctl set env/app/%p/inc "websockets"
+ExecStartPost=-/usr/bin/etcdctl set env/app/%p/auth "admin"
+ExecStartPost=-/bin/bash -c 'sleep 9 ; etcdctl set uat/%p/%i "%H:$(docker port %p.%i | cut -d : -f 2)"'
+
+# Stop
+ExecStop=-/usr/bin/etcdctl rm uat/%p/%i
+ExecStopPost=-/bin/bash -c 'etcdctl set stream "%H | $(date +\"%%a %%r\") | %N container on %H is going OFFLINE "'
+ExecStopPost=-/bin/bash -c 'etcdctl set fail/%p/%i "$(date -u +%%s)"'
+ExecStopPost=-/usr/bin/docker stop %p.%i
+
+# PostStop
+ExecStopPost=-/usr/bin/docker rm %p.%i
+
+[X-Fleet]
+MachineMetadata=situation=%i
+

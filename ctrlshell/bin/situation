@@ -1,0 +1,15 @@
+#!/bin/bash
+#
+set -a
+source /ctrl/.IPS
+
+if [ -z ${1} ] ; then
+	thesit="$(cat /etc/motd)"
+	echo "${thesit}"
+	exit 0
+fi
+
+isthis="${1}"
+
+/usr/bin/etcdctl exec-watch --recursive ${isthis} -- sh -c '/ctrl/bin/resolve "$ETCD_WATCH_KEY"' 
+

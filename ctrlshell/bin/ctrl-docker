@@ -1,0 +1,42 @@
+#!/bin/bash
+#
+source /.IPS 
+msgbus "$ipscmd preparing template. "
+
+
+host=$(perfectstranger | cut -d '_' -f 1)
+SCALES=($(etcdctl ls --sort size/app))
+        for s in "${SCALES[@]}" ; do
+        scalebot=$(echo $s | cut -d '/' -f 4)
+        SARR+=( "$scalebot" )
+    done
+botscale=${SARR[ $(( RANDOM % ${#SARR[@]} )) ]}
+
+
+INKEYS=($(etcdctl ls --sort --recursive vol/mnt))
+for (( i=0; i<${#INKEYS[@]}; i++ )) ; do
+    tfile="${INKEYS[$i]}"
+    thesit=$( echo "$tfile" | cut -d '/' -f 2-)
+vals=$(etcdctl get $tfile 2> /dev/null)
+if [ $? -eq 0 ] ; then
+    reg=$(echo $i | cut -d '/' -f 4)
+    RARR+=( "$tfile" )
+else
+    continue
+fi
+done
+
+mntregion=${RARR[ $(( RANDOM % ${#RARR[@]} )) ]}
+region=$(echo ${mntregion} | cut -d '/' -f 4)
+vpc=$(echo ${mntregion} | cut -d '/' -f 5)
+subid=$(echo ${mntregion} | cut -d '/' -f 6)
+
+etcdctl set ${ctrlenv}/name "$host"
+etcdctl set ${ctrlenv}/size "$botscale"
+etcdctl set ${ctrlenv}/region "$region"
+etcdctl set ${ctrlenv}/vpc "$vpc"
+etcdctl set ${ctrlenv}/subnet "$subid"
+etcdctl set ${ctrlenv}/stage "dev"
+description="$BUDDY prepared a $botscale docker for launch from $region in $vpc and az $subid"
+msgbus "$description"
+

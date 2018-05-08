@@ -1,0 +1,66 @@
+#!/bin/bash
+#set -eo pipefail
+set -a
+source /.IPS
+
+
+IFS=$'\n'
+echo -n "$ipscmd index of cloud resources in process. . . please wait . . . "
+ARR=($(aws ec2 describe-regions | jq -r '.Regions[].RegionName'))
+    for (( i=0; i<${#ARR[@]}; i++ )) ; do
+	    region="${ARR[$i]}"
+        echo -n " . "
+        getsubs=($(aws ec2 describe-subnets --region $region | jq -r '.Subnets[] | "\(.VpcId) \(.SubnetId) \(.AvailabilityZone) \(.CidrBlock)"'))
+   	        for (( g=0; g<${#getsubs[@]}; g++ )) ; do
+        	    subarr="${getsubs[$g]}"
+        	    vpc=$(echo $subarr | cut -d ' ' -f 1)
+        	    subnet=$(echo $subarr | cut -d ' ' -f 2)
+        	    subnetaz=$(echo $subarr | cut -d ' ' -f 3)
+	     	    az="${subnetaz: -1}"
+        	    cidr=$(echo $subarr | cut -d ' ' -f 4)
+                    if [ "$vpc" == "null" ] ; then
+                        continue
+                    else
+                        etcdctl set env/az/${region} "${vpc}" &>/dev/null
+                        echo -n " . "
+                        output=$(etcdctl set aws/${region}/${az}/${vpc} "${subnet}" 2>&1)
+                        if [ $? -eq 0 ] ; then
+                            msgbus "${TAGBOSS} $ipscmd indexing ${subnet} in ${vpc} for ${region}${az} to local keystore"
+                            echo -n " . "
+                        else
+                            msgbus "${TAGFAIL} $ipscmd not applying index: $output"
+                        echo -n " :^P  "
+                        fi
+                    fi
+   	        done
+    done
+
+domains=($(aws route53 list-hosted-zones | jq -r '.HostedZones[] | "\(.Name) \(.Id)"'))
+echo
+echo -n "Indexing zones for namespace . "
+msgbus  "${TAGBOSS} Indexing zones for namespace . "
+    for (( i=0; i<${#domains[@]}; i++ )) ; do
+        domain=$(echo ${domains[$i]} | cut -d ' ' -f 1)
+        zoneid=$(echo ${domains[$i]} | cut -d ' ' -f 2)
+        zoneid=$(echo ${zoneid} | cut -d '/' -f 3)
+        etcdctl set zone/${domain} "${zoneid}" &>/dev/null
+        msgbus "${TAGBOSS} Indexing namespace ${domain} "
+        echo -n " . "
+    done
+echo
+
+echo "$0 looking for filesystems we can leverage"
+regions=($(ls_regions))
+    for (( i=0; i<${#regions[@]}; i++ )) ; do
+        region="${regions[$i]}"
+        echo -n " . "
+        efsid=$(aws efs describe-file-systems --region $region 2>/dev/null | jq -r '.FileSystems[].FileSystemId')
+            if [ ! -z $efsid ] ; then
+                msgbus "${TAGBOSS} $ipscmd found efs storage available in $region"
+                etcdctl set vol/efs/$region "$efsid"
+            else
+                continue
+            fi
+    done
+
+exit 0

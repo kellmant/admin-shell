@@ -1,0 +1,39 @@
+#!/bin/bash
+#
+. /.IPS
+if [ -z ${1} ] ; then
+    echo
+    echo "$0 <name>"
+    echo
+    fleetctl list-units | grep repo@ 
+    fleetctl list-units | grep keypipe@ 
+    echo
+    exit 1
+fi
+
+if [ "${1}" == "crash" ] || [ "${1}" == "burn" ] ; then
+    etcdctl set msgbus/slapi "$(date) | $(basename $0) | ${1} repository for destructive testing coming online"
+    fleetctl start bigrepo@${1}
+    sleep 10
+    fleetctl start bigops@${1}
+    sleep 6
+else
+
+    etcdctl set msgbus/slapi "$(date) | $(basename $0) | ${1} repository coming online"
+fleetctl start repo@${1}
+sleep 12
+fleetctl start watchrepo@${1}
+
+sleep 8
+fi
+sleep 4
+
+CORELIST=($(get_corehosts))
+	for c in "${CORELIST[@]}" ; do
+	    fleetctl stop api@${c}
+	    sleep 5
+	    fleetctl destroy api@${c}
+	    sleep 3
+	    fleetctl start api@${c}
+        sleep 6
+	done

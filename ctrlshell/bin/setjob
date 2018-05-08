@@ -1,0 +1,69 @@
+#!/bin/bash
+#set -eo pipefail
+. .InterdimensionalPortalService
+. .color
+#display_headsup
+#ps | grep [j]obwatcher
+#skey jobs/run
+echo -e "Global settings"
+OLDIFS=$IFS
+IFS=$'\n'
+jobsets=($(skey jobs/set 2>/dev/null))
+for (( s=0; s<${#jobsets[@]}; s++ )) ; do
+    jobset=$(echo -e ${jobsets[$s]} | cut -d '/' -f 3-)
+echo -en " [ ${jobset} ] "
+done
+echo
+IFS=$OLDIFS
+echo "--------------------------"
+echo "Job Queue "
+INJOBS=($(etcdctl ls --sort -r $SKEY/jobs/run))
+for (( j=0; j<${#INJOBS[@]}; j++ )) ; do
+    tjob="${INJOBS[$j]}"
+    vals=$(etcdctl get $tjob 2>/dev/null)
+    rjob=$(echo "${tjob}" | cut -d '/' -f 3-)
+    jpid=$(echo $vals | cut -d ' ' -f 1)
+    jstat=$(echo $vals | cut -d ' ' -f 2)
+    jtime=$(echo $vals | cut -d ' ' -f 3-)
+    if [ "$jstat" == "done" ] ; then
+    echo -e "${Blue}${rjob}${NC} => ${Purple}Finished at ${jtime}${NC}"
+    continue
+    else
+        procout=$(ps | grep $jpid | grep -v grep | cut -d '}' -f 2- | cut -d ' ' -f 3-)
+    echo -e "${CKEY}${rjob}${NC}=>${CVAL}${jstat}${NC} ACTIVE ${BCyan}${procout}${NC}"
+    fi
+done
+echo "--------------------------"
+#echo -e "job history "
+#while true ; do
+#cnt=0
+#INKEYS=($(etcdctl ls --sort -r $SKEY/jobs/start))
+#for (( i=0; i<${#INKEYS[@]}; i++ )) ; do
+#    tfile="${INKEYS[$i]}"
+#    element=$(echo ${tfile} | cut -d '/' -f 5-)
+#    vals=$(etcdctl get $tfile 2>/dev/null)
+#    if [ $? -eq 0 ] ; then
+#        (( cnt++ ))
+#        echo -e "${CKEY}${element}${NC}=>${CVAL}${vals}${NC}"
+#    else
+#        continue
+#    fi
+#done
+#echo "--------------------------"
+if [ -z $1 ] ; then
+    exit
+else
+#u_confirm "Send new job? " || exit 1
+echo
+submit_job "$@"
+msgbus "$ipscmd ${CKEY}jobs/start${NC} => $@ ${NC}"
+#read sndjob
+msgbus "${cheer} Way to go $BUD you did it, you added a job to a queue, like a boss. A cloud boss. This whole thing is just a textual value to an arbitrary tag that ultimatly just points to an api. Now just wait until you see what we have to test :) Not much. But if you play around, launch a few things, you will generate the data I need to start building the wopr"
+fi
+
+#done
+
+
+exit 0
+
+

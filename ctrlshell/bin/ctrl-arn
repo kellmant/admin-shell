@@ -1,0 +1,24 @@
+#!/bin/bash
+#
+set -a
+source /.IPS
+
+    if [ "$1" == "off" ] ; then
+        arntopic=$(etcdctl get /env/global/arn)
+        OLDIFS=$IFS
+        IFS=$'\n'
+        MYSUBS=($(aws sns list-subscriptions | jq -r .Subscriptions[].SubscriptionArn))
+            for p in "${MYSUBS[@]}" ; do
+                aws sns unsubscribe --subscription-arn "$p"
+            done
+    # aws sns unsubscribe --subscription-arn
+        msgbus " removing sms topic $arntopic "
+        aws sns delete-topic --topic-arn ${arntopic}
+        exit
+    else
+        arntopic=$(aws sns create-topic --name $SKEY | jq -r .TopicArn)
+        msgbus "setting arn topic subscription to $arntopic for this session"
+        etcdctl set env/global/arn "$arntopic"
+        exit
+    fi
+

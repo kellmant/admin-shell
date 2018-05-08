@@ -1,0 +1,6 @@
+#!/bin/bash
+#
+#
+xpass=$(shuf -n4 ~/bin/word | tr '\n' '-')
+xpass=${xpass%?}
+echo -n $xpass

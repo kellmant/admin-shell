@@ -1,0 +1,55 @@
+#!/bin/bash
+. InterdimensionalPortalService
+echo -e "We can arrange contact for simple notices or verification through ${CGOOD}text messages.${NC}"
+echo 
+        u_confirm "So $BUD do you want to recieve sms alerts?" || { exit 1 ; }
+echo "Enter a number for the system to send sms messages in the form of area code, prefix then local number."
+echo -e "example: ${CGOOD}4165551234${NC} "
+read phoneNumber
+pat="^[0-9]{10}$"
+while [[ ! $phoneNumber =~ $pat ]]
+    do
+        echo "hey $BUD $phoneNumber is not valid, do you want to subscribe to sms alerts?" 
+        echo "The system will contact you with access information like links, or passwords."
+        echo " The only other time is when human attention is needed." 
+        echo "which is not much to be honest." 
+        echo 
+        u_confirm "So $BUD do you want to recieve sms alerts?" || { exit 1 ; }
+        echo "Please enter a valid 10 digit number to contact you on sms, example format: 1112220000"
+        read phoneNumber
+        echo 
+        echo 
+    done
+
+#    etcdctl set $SKEY/
+#msgbus "$BUD subbed to session $SKEY alerts when any human interaction is needed."
+sms="+1${phoneNumber}"
+topic=$(etcdctl get env/global/arn) || { msgbus "$BUD trying to sub, but no ARN is set!!" ; exit 1 ; }
+
+subarn=$(aws sns subscribe --topic-arn $topic --protocol sms --notification-endpoint ${sms} | jq -r .SubscriptionArn) 
+etcdctl set usr/$BUD/sub "$subarn"
+etcdctl set env/subs/$BUD "$subarn"
+# verify this is actually their number."
+opensesame=$(perfectstranger | cut -d '_' -f 1)
+aws sns publish --topic-arn "${topic}" --message "${opensesame}" &>/dev/null
+echo "I just messaged you a secret word, please repeat back to me what I sent to ${phoneNumber}"
+read secword
+strikes=0
+while [[ ! $secword == $opensesame ]]
+    do
+        (( strikes++ ))
+        echo "Nope. strike $strikes"
+            if [ $strikes -lt 3 ] ; then
+                read secword
+            else
+                echo "I don't think you are who you claim to be, bailing on sms verification."
+                aws sns unsubscribe --subscription-arn $subarn
+                etcdctl rm usr/$BUD/sub "$subarn"
+                etcdctl rm env/subs/$BUD "$subarn"
+                msgbus "${TAGSOS} $BUD in session $SKEY failed to verify their sms number."
+                exit 1
+            fi
+    done
+
+
+msgbus "$BUD subbed to session $SKEY alerts when any human interaction is needed."

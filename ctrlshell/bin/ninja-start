@@ -1,0 +1,44 @@
+#!/bin/bash
+#set -eo pipefail
+#ps | grep [j]obwatcher
+#skey jobs/run
+source /.IPS
+
+IFS=$'\n'
+
+echo
+
+if [ -z ${1} ] ; then
+    INUSERS=($(etcdctl ls usr))
+for (( i=0; i<${#INUSERS[@]}; i++ )) ; do
+    uuser="${INUSERS[$i]}"
+    nuser=$(echo $uuser | cut -d '/' -f 3)
+    ninjaserve=($(fleetctl list-units --fields sub,unit,active,machine | grep $nuser | grep ninja))
+    if [[ ${#ninjaserve[@]} -lt 1 ]] && [[ ! -d "/efs/home/${nuser}/node" ]] ; then
+		continue
+	elif 
+    		[[ ${#ninjaserve[@]} -lt 1 ]] && [[ -d "/efs/home/${nuser}/node" ]] ; then
+        echo -en "${BWhite}${ipscmd} ${CKEY}${nuser}${NC} "
+        echo -e "  :setup but not running "
+    else
+        #echo -e "${BGreen}${nuser}${NC} already running."
+        continue
+    fi
+    done
+echo
+ninja-stop
+echo
+    exit 1
+fi
+
+jobstart "$$"
+trap "jobtrace '$$'" 0 1 2 3 6
+
+fleetctl start ninja@${1}
+sleep 18
+fleetctl start keystore@${1} 
+sleep 8
+msgbus " dumping keys for ${1} "
+
+cd /efs/home/${1}/node
+dumpkeys usr/${1}

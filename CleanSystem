@@ -1,0 +1,33 @@
+#!/bin/bash
+#
+# nothing fancy
+# just run the commands to get it launched
+#
+source /efs/deploy/.corebuild
+
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+cd $DIR
+. ./tested
+RUNNINGMIS=($(fleetctl list-units --fields unit | grep ${buildobj}@ | grep -v irc))
+for c in "${RUNNINGMIS[@]}" ; do
+	echo "going after $c"
+	fleetctl stop $c
+	sleep 6
+	fleetctl destroy $c
+	sleep 2
+done
+fleetctl destroy ${buildobj}@.service
+exit
+
+
+
+CORELIST=($(get_corehosts))
+for d in "${CORELIST[@]}" ; do
+	sleep 3
+	ssh ${d}.${overlay} "docker rmi registry:5000/${buildobj}:latest"
+	done
+echo "done. "
+
+
+
+

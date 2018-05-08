@@ -1,0 +1,62 @@
+#!/bin/bash
+#set -eo pipefail
+source /.IPS
+  
+CLUSTERSIZE=0
+corehost=$(etcdctl get $ctrlenv/corehost) || { corehost="core" ; }
+myregion=$(etcdctl get $ctrlenv/region) || { myregion="us-east-1" ; }
+template=$(etcdctl get $ctrlenv/template) || { template="http://www.killhup.cx/template.core" ; }
+vpcget=$($PULLKEY/env/az/${myregion}) 
+vpc=$(echo $vpcget | jq -r '.node.value')
+echo "$ipscmd has found ${vpc} in $myregion is target location for coreos cluster, now checking for efs availability."
+azcluster=($(etcdctl ls /aws/${myregion}))
+    for (( f=0; f<${#azcluster[@]}; f++ )) ; do
+        subkey="${azcluster[$f]}/$vpc"
+        az=$(echo "${azcluster[$f]}" | cut -d '/' -f 4) 
+        getsub=($(etcdctl ls --recursive $subkey))
+            for (( s=0; s<${#getsub[@]}; s++ )) ; do
+                efssub=$(etcdctl get ${getsub[$s]})
+                efstarget=$(etcdctl get vol/mnt/$efssub)
+                echo " found available mount core-${az} target in $myregion ${vpc} $efssub is $efstarget"
+                (( CLUSTERSIZE++ ))
+            done
+    done
+    echo " $CLUSTERSIZE availability zones found for corecluster."
+
+    if [ $CLUSTERSIZE -le 2 ] ; then
+        CLUSTERSIZE=3
+    fi
+etcdctl set $ctrlenv/clustersize "$CLUSTERSIZE"
+coresize=$(etcdctl get $ctrlenv/size) || { coresize="medium" ; }
+$($PUTENV/host -d value="$corehost")  2>/dev/null
+$($PUTENV/template -d value="$template")  2>/dev/null
+$($PUTENV/region -d value="$myregion")  2>/dev/null
+$($PUTENV/size -d value="$coresize")  2>/dev/null
+$($PUTENV/vpc -d value="$vpc") 2>/dev/null
+$($PUTENV/private -d value="$privdom") 2>/dev/null
+$($PUTENV/public -d value="$pubdom") 2>/dev/null
+$($PUTENV/disk -d value="DeviceName=/dev/xvda,Ebs={VolumeSize=24,DeleteOnTermination=true,VolumeType=gp2}") 2>/dev/null
+efssecgrp=$(etcdctl get env/sec/group/efs/$myregion)
+descsecgrp=$(aws ec2 describe-security-groups --region $myregion --group-name ${ipscmd}-${SKEY})
+    if [ $? -eq 0 ] ; then
+        descsecgrp=$(echo ${descsecgrp[@]} | jq -r '.SecurityGroups[].GroupId')
+        echo "scgroup exists $descsecgrp"
+        setsecgrp="$descsecgrp $efssecgrp"
+        $($PUTENV/secgroup -d value="$setsecgrp") 2>/dev/null 
+    else
+        crsecgrp=$(aws ec2 create-security-group --region $myregion --group-name ${ipscmd}-${SKEY} --description "$SKEY" --vpc-id "$vpc" | jq -r .GroupId)
+        etcdctl set env/sec/group/$myregion "$crsecgrp"
+        setsecgrp="$crsecgrp $efssecgrp"
+        $($PUTENV/secgroup -d value="$setsecgrp") 2>/dev/null 
+        aws ec2 authorize-security-group-ingress --region $myregion --group-id $crsecgrp --protocol all --source-group $crsecgrp
+        aws ec2 authorize-security-group-ingress --region $myregion --group-id $crsecgrp --protocol tcp --port 443 --cidr 0.0.0.0/0
+        aws ec2 authorize-security-group-ingress --region $myregion --group-id $crsecgrp --protocol tcp --port 80 --cidr 0.0.0.0/0
+        aws ec2 authorize-security-group-ingress --region $myregion --group-id $crsecgrp --protocol tcp --port 22 --cidr 0.0.0.0/0
+        aws ec2 authorize-security-group-ingress --region $myregion --group-id $crsecgrp --protocol tcp --port 6667 --cidr 0.0.0.0/0
+        aws ec2 authorize-security-group-ingress --region $myregion --group-id $crsecgrp --protocol tcp --port 6697 --cidr 0.0.0.0/0
+    fi
+
+msgbus "$ipscmd completed configuration, ready for editing or launch. "
+
+exit 0
+

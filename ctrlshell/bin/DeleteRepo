@@ -1,0 +1,38 @@
+#!/bin/bash
+#
+. /.IPS
+
+if [ -z ${1} ] ; then
+    echo
+    echo "$0 <name>"
+    echo
+    fleetctl list-units | grep repo@ | grep -v build | grep -v watch
+    echo
+    exit 1
+fi
+
+if [ "${1}" == "crash" ] || [ "${1}" == "burn" ] ; then
+    etcdctl set msgbus/slapi "$(date) | $(basename $0) | DESTROY ${1} repository "
+    fleetctl stop bigops@${1}
+    sleep 10
+    fleetctl stop bigrepo@${1}
+    sleep 6
+    fleetctl destroy bigrepo@${1}
+    fleetctl destroy bigops@${1}
+else
+
+fleetctl stop secops@${1}
+sleep 8
+fleetctl stop watchrepo@${1}
+sleep 9
+fleetctl stop repo@${1}
+sleep 9
+fleetctl destroy watchrepo@${1}
+fleetctl destroy  secops@${1}
+fleetctl destroy repo@${1}
+
+fi
+
+rm -rf /efs/vol/repo/${1}
+etcdctl rm --recursive ops/net/api/${1}
+#etcdctl rm --recursive jobs/done/api/${1}

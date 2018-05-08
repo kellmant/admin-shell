@@ -1,0 +1,42 @@
+#!/bin/bash
+#
+source /.IPS
+
+if [ -z "${1}" ] ; then
+    etcdctl ls --sort $ipsenv
+    exit
+fi
+killtarget="${1}"
+
+InstanceId=$(etcdctl get $ipsenv/${killtarget}/InstanceId) || { echo "No running instance called $killtarget" ; exit 1 ; }
+placement=$(etcdctl get $ipsenv/${killtarget}/Placement | jq -r '.AvailabilityZone')
+region="${placement%?}"
+
+echo "Killing $InstanceId in $region "
+aws ec2 create-tags --region $region --tags Key=Name,Value=DEAD --resources $InstanceId
+deathstat=$(aws ec2 terminate-instances --region $region --instance-ids $InstanceId)
+
+
+                 echo " $ipscmd $deathstat"
+                 sleep 15
+                 getdef=$(aws ec2 describe-instances --region $region --instance-id $InstanceId | jq '.Reservations[].Instances[]')
+                 declare -A myarray
+                 while IFS="=" read -r key value ; do
+                 myarray[$key]="$value"
+                 done < <(echo "${getdef[@]}" | jq -cr 'to_entries | map("\(.key)=\(.value)") | flatten[]')
+                 for key in "${!myarray[@]}" ; do
+                 etcdctl set $ipsenv/${killtarget}/$key "${myarray[$key]}"
+                                    done
+                 stat=$(etcdctl get $ipsenv/${killtarget}/State | jq -r '.Name')  
+                                msgbus "$killtarget $stat"
+                        dns_rm ${killtarget} 
+                        etcdctl rm --recursive $ipsenv/${killtarget}
+                        msgbus "$killtarget gone at that the hands of $BUDDY " 
+sleep 10
+msgbus " Instance destruction completed by $ipscmd" 
+
+oldsec=$(etcdctl get sec/group/$killtarget) 
+secgroup=$(aws ec2 delete-security-group --region $region --group-id ${oldsec} 2>/tmp/exit.${ipscmd}) || { msgbus "  $ipscmd $BUDDY $(cat /tmp/exit.${ipscmd} | tr -d '\n') ${NC} " ; }
+etcdctl rm --recursive sec/group/$killtarget
+
+

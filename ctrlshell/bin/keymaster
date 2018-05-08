@@ -1,0 +1,20 @@
+#!/bin/bash
+#
+set -a
+source /.IPS
+resize
+tput reset
+
+u_confirm "Are you the keymaster $BUDDY ? " || exit 1
+etcdctl set Exit/state "/"
+keybrowser
+while [ $? -lt 255 ] ; do
+    keybrowser
+    keychk=$(etcdctl get Exit/state)
+    if [ "$keychk" == "score" ] || [ "$keychk" == "Exit" ] ; then
+        exit 255;
+    else
+        continue
+    fi
+done
+

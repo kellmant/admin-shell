@@ -1,0 +1,17 @@
+#!/bin/bash
+#set -eo pipefail
+#ps | grep [j]obwatcher
+#skey jobs/run
+source /.IPS
+
+echo "=========================================="
+ninja-setup
+echo "=========================================="
+ninja-remove
+echo "=========================================="
+ninja-start
+ninja-stop
+echo "=========================================="
+
+exit 0
+

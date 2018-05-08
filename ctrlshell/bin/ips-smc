@@ -1,0 +1,198 @@
+#!gbin/bash
+source /.IPS
+
+if [ -f $HOME/.SMC ] ; then
+    cat $HOME/.SMC
+    exit 1
+fi
+
+jobstart "$$"
+trap "jobtrace '$$'" 0 1 2 3 6
+
+declare -A ENVS
+# string for the vars
+environmentVariables=""
+tmpfile=/tmp/test$$
+echo "#!/bin/bash" > $tmpfile
+##
+##
+# Take a key value array and add that into the $environmentVariables string
+# $1 = array of data
+generateEnvString(){
+  msgbus "${TAGIPS} ${ipscmd} generating the environment variables from keystore"
+
+  for i in ${!ENVS[@]}; do
+    val="${ENVS[$i]}"
+    key="$i"
+    echo "echo \"$key=$val\" >> /home/admin/firstconfig" >> $tmpfile
+    environmentVariables="${environmentVariables} echo \"$key=$val\" >> /home/admin/firstconfig"
+  done
+#  echo "environment string: $environmentVariables"
+echo "clish -c 'set timezone America / Toronto' -s" >> $tmpfile
+echo "clish -c 'set ntp server primary 0.pool.ntp.org version 4' -s" >> $tmpfile
+echo "clish -c 'set ntp server secondary 1.pool.ntp.org version 4' -s" >> $tmpfile
+echo "clish -c 'set ntp active on' -s" >> $tmpfile
+echo "clish -c 'set user admin shell /bin/bash' -s" >> $tmpfile
+echo "config_system -f /home/admin/firstconfig" >> $tmpfile
+}
+
+##
+# fetch the data from the segment of etcd specified and convert into a key value array
+# presumes the segment is under /env/
+# $1 = segment to use on etcd
+environmentDataFromEtcd(){
+  # if no arg passed, return erro
+  #if [[ -z $1 ]]; then
+  #  echo "No arugment passed, returning."
+  #  return 1
+  #fi
+  # check the env segment exists
+  local notFound=$(etcdctl ls ${ipsenv}/config_system | grep 'Key not found' | wc -l)
+  # return error if not found
+  if [[ "$notFound" -gt "1" ]]; then
+    msgbus "${TAGIPS} ${ipscmd} Environment segment not set, returning with nothing from the keystore for $BUD"
+    return 2
+  fi
+  msgbus "${TAGCTRL} ${ipscmd} fetching data from keystore"
+  # loop over the env vars and fetch the data
+  for i in `etcdctl ls ${ipsenv}/config_system`; do
+    key=$(echo $i | sed -r "s#/${ipsenv}/config_system/##gi")
+    # fetch the env var
+    val=$(etcdctl get ${i});
+    if [ -z $val ]; then
+      msgbus "${BUDDY} ${ipscmd} Could not retrive $i, possibly a directory, ignoring"
+    else
+      ENVS[$key]=${val};
+    fi
+  done
+msgbus "${ipscmd} has fetched config from keystore session $SKEY for ${BUDDY}"
+}
+
+# create some test data
+#generateTestEnvData
+# fetch from a test area in the etcd env vars
+environmentDataFromEtcd 
+generateEnvString
+# output the result:
+msgbus "${BUDDY} $ipscmd config_system file created for launch of instance."
+gzip $tmpfile
+
+# launch script
+#
+#
+msgbus "$ipscmd started by $BUDDY"
+mgenv="$ipsenv"
+region=$(etcdctl get $mgenv/region) || { exit 1 ; }
+AMI=$(etcdctl get $mgenv/AMI)
+disk=$(etcdctl get $mgenv/disk)
+sizeing=$(etcdctl get $mgenv/size)
+size=$(etcdctl get size/mg/${sizeing})
+points=$(etcdctl get points/${size})
+vpc=$(etcdctl get $mgenv/vpc)
+secgroup=$(etcdctl get $mgenv/secgroup)
+hostname=$(etcdctl get $mgenv/config_system/hostname)
+username=$(etcdctl get $mgenv/config_system/mgmt_admin_name)
+password=$(etcdctl get $mgenv/config_system/mgmt_admin_passwd)
+host=$(echo "$hostname" | cut -d '.' -f 1)
+InstanceId=$(aws ec2 run-instances --region $region --image-id $AMI --key-name $SKEY --security-group-ids $secgroup --user-data fileb://${tmpfile}.gz --instance-type $size --block-device-mappings ${disk}  | jq -r '.Instances[].InstanceId') || { echo "instance not started" ; msgbus "$ipscmd could not start instance in region $region vpc $vpc,  exiting $BUD from this mess." ; exit 1 ; }
+#
+echo "Initalizing."
+	msgbus "${TAGIPS} $ipscmd initalizing instance $InstanceId in region $region vpc $vpc,  congrats $BUD"
+	sleep 20
+getdef=$(aws ec2 describe-instances --region $region --instance-ids $InstanceId | jq '.Reservations[].Instances[]') || { msgbus "$ipscmd can't find evidence of instance starting." ; exit 1 ; }
+declare -A myarray
+        while IFS="=" read -r key value ; do
+            myarray[$key]="$value"
+        done < <(echo "${getdef[@]}" | jq -cr 'to_entries | map("\(.key)=\(.value)") | flatten[]')
+
+for key in "${!myarray[@]}"
+do
+            if [ "$key" == "NetworkInterfaces" ] ; then
+                continue
+            else
+                etcdctl set ops/${host}/$key "${myarray[$key]}"
+            fi
+done
+
+#
+# tag the instances so we can identify it
+#
+aws ec2 create-tags --region $region --tags Key=Name,Value=$host --resources $InstanceId
+msgbus "${TAGIPS} Tagging $InstanceId as $host for $BUDDY"
+aws ec2 create-tags --region $region --tags Key=session,Value=$SKEY --resources $InstanceId
+echo " Waiting for public IP."
+sleep 5
+blastoff=$(date)
+
+#
+# Set DNS record
+#
+IP=$(etcdctl get ops/${host}/PublicIpAddress) || { msgbus "${TAGFAIL} Can't get Public IP for ${host} bailing." ; exit 1 ; }
+msgbus "${BUDDY} $hostname is $InstanceId at $IP setting name to resolve."
+dnsid=$(echo "$hostname" | cut -d '.' -f 2-)
+zoneid=$(etcdctl get zone/${dnsid}.) 
+dns=/tmp/DNS.$hostname
+
+echo "dns injection to resolve $1 to $IP"
+echo "{" > $dns
+echo "      \"Comment\": \"${hostname} DNS\"," >> $dns
+echo "      \"Changes\": [" >> $dns
+echo "      {" >> $dns
+echo "\"Action\": \"UPSERT\"," >> $dns
+echo "\"ResourceRecordSet\": {" >> $dns
+echo "\"Name\": \"${hostname}\"," >> $dns
+echo "\"Type\": \"A\"," >> $dns
+echo "\"TTL\": 60," >> $dns
+echo "\"ResourceRecords\": [" >> $dns
+echo "     {" >> $dns
+echo "\"Value\": \"$IP\"" >> $dns
+echo "       }" >> $dns
+echo "      ]" >> $dns
+echo "     }" >> $dns
+echo "    }" >> $dns
+echo "   ]" >> $dns
+echo "  }" >> $dns
+
+aws route53 change-resource-record-sets --hosted-zone-id $zoneid --change-batch file://$dns
+
+#
+# let the user know whats happened
+#
+echo " "
+sleep 5
+#
+# set launch time and cleanup before exit
+#
+land=$(date)
+msgbus "${BUDDY} $InstanceId launched at $blastoff, and should be landed in 30 minutes from $land"
+echo "" > $HOME/.SMC
+echo "Security Management Center" >> $HOME/.SMC
+echo " " >> $HOME/.SMC
+echo -e "${BBlue} ElasticIP${NC}: ${BGreen}${IP}${NC}" >> $HOME/.SMC
+echo -e " ${BBlue}Hostname:${NC} ${BGreen}${hostname}${NC}" >> $HOME/.SMC
+echo -e "R80 SmartConsole Install available here: ${BYellow} http://cdn.seclab.cloud/SmartConsole.exe ${NC}" >> $HOME/.SMC
+echo " " >> $HOME/.SMC
+echo -e " Login to security management console with credentials: " >> $HOME/.SMC
+echo -e "${On_Blue}${BYellow}username:${NC} ${BWhite}${username}${NC}" >> $HOME/.SMC
+echo -e "${On_Red}${BYellow}password:${NC} ${BWhite}${password}${NC}" >> $HOME/.SMC
+echo " " >> $HOME/.SMC
+echo -e "1. Under the 'Gateway & Servers' tab, select the smc object and set the IP to ${BGreen}${IP}${NC} and be sure to publish your change." >> $HOME/.SMC
+echo " " >> $HOME/.SMC
+echo -e "2. Under the 'Manage & Settings' tab, select Blades and set the Management API Advanced Settings to 'All IP Addresses'" >> $HOME/.SMC
+echo "2. Under 'Manage & Settings' tab, select Blades and set Management API Advanced Settings to 'All IP Addresses'" >> $HOME/.sms
+echo -e "Publish the change, and then close the GUI. The API Controller will take over from here to complete first time setup." >> $HOME/.SMC
+echo " " >> $HOME/.SMC
+echo -e "Once these steps are completed, run '${BGreen}apirestart${NC}' to have the controller finish preparing the management station." >> $HOME/.SMC
+
+#msgbus "Login to management at ${hostname}   credentials: ${username} password: ${password}"
+echo " " >> $HOME/.SMC
+echo " " >> $HOME/.SMC
+#
+#etcdctl set $SKEY/jobs/start/mgstat "$host"
+#/ips/ops/mgstat &>>/dev/null &!
+curscore=$(etcdctl get score)
+newscore=$(echo "$curscore + $points" | bc)
+etcdctl set score "$newscore" &>/dev/null
+
+msgbus " COFFEE BREAK !! Take 30 minutes $BUDDY"
+msgbus " SCORE ${scoreit} $BUDDY has scored $points points"

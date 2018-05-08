@@ -1,0 +1,168 @@
+#!/bin/bash
+#
+source /efs/deploy/.corebuild
+
+CORELIST=($(get_corehosts))
+
+if [ "${1}" == "update" ] ; then
+        watchit=0
+	for c in "${CORELIST[@]}" ; do
+        echo -en "${BYellow}"
+	    fleetctl stop api@${c}
+	    sleep 9
+        echo -en "${NC} ${ALERT}"
+	    fleetctl destroy api@${c}
+	    sleep 8
+        echo -en "${NC} ${BGreen}"
+	    fleetctl start api@${c}
+        sleep 9
+        echo -en "${NC}"
+	done
+elif [ "${1}" == "restart" ] ; then
+        watchit=1
+	for c in "${CORELIST[@]}" ; do
+        echo -en "${BYellow}"
+	    fleetctl stop api@${c}
+	    sleep 8
+        echo -en "${NC} ${ALERT}"
+	    fleetctl destroy api@${c}
+	    sleep 6
+        echo -en "${NC} ${BGreen}"
+	    fleetctl start api@${c}
+        sleep 9
+    done
+elif [ "${1}" == "stop" ] ; then
+        watchit=0
+	for c in "${CORELIST[@]}" ; do
+        echo -en "${BYellow}"
+	    fleetctl stop api@${c}
+	    sleep 6
+        echo -en "${ALERT}"
+	    fleetctl destroy api@${c}
+        echo -en "${NC}"
+	    sleep 4
+	done
+elif [ "${1}" == "start" ] ; then
+        watchit=1
+	for c in "${CORELIST[@]}" ; do
+        echo -en "${BWhite} ${On_Green}"
+	    fleetctl start api@${c}
+	    sleep 8
+        echo -en "${NC}"
+	done
+elif [ "${1}" == "watch" ] ; then
+        watchit=1
+    else
+        watchit=0
+fi
+
+date
+	for c in "${CORELIST[@]}" ; do
+        echo
+    echo -en "${On_White}${BBlack}| $c CONTAINER SERVICES HOST ==>  "
+        tput el
+    echo -e "${NC}"
+    echo -en "${On_Black}${BYellow}|_/MAP:"
+    echo -en "${NC}"
+    echo -en "${ALERT}"
+fleetctl journal --lines 1 gw@$c | sed '1d'
+echo -en "${NC}"
+    echo -en "${On_Black}${BYellow}|_/API:"
+    echo -en "${NC}"
+   echo -en "${On_Blue}${BWhite}"
+fleetctl journal --lines 1 api@$c | sed '1d'
+echo -en "${NC}"
+    echo -en "${On_White}${BBlack}|             <== $c CONTAINER SERVICES HOST "
+        tput el
+    echo -e "${NC}"
+    done
+    echo
+
+    MYREPOS=($(etcdctl ls --sort ops/net/api 2>/dev/null))
+    objcount=0
+    for r in "${MYREPOS[@]}" ; do
+        rout="$(echo $r | cut -d '/' -f 5)"
+        repocount=$(etcdctl get jobs/done/api/$rout/objects 2>/dev/null) || { repocount=0 ; }
+        objcount=`expr $objcount + $repocount`
+        echo  -e "|_/Object Store ${BCyan}$rout ${NC}=> ${BYellow}https://api.seclab.cloud/uid$rout/ ${NC}"
+        fleetctl list-units | grep repo@$rout
+        skey jobs/done/api/$rout 2>/dev/null
+    done
+        echo " "
+    echo -e "Published ${BWhite}${On_Purple}$objcount total objects${NC} across ${#MYREPOS[@]} Dynamic Groups"
+    echo
+    echo "$(basename $0) <restart>/<stop>/<start>/<watch>"
+
+    sleep 2
+
+    if [ $watchit -eq 0 ] ; then
+        echo
+        exit 0
+    fi
+
+    
+tput clear
+
+    while true ; do
+tput sc
+date
+tput el
+	for c in "${CORELIST[@]}" ; do
+        tput el
+    echo -en "${On_White}${BBlack}|             $c CONTAINER SERVICES HOST ==>  "
+        tput el
+    echo -e "${NC}"
+    echo -en "${On_Black}${BYellow}|_/MAP:"
+    echo -en "${NC}"
+    echo -en "${ALERT}"
+fleetctl journal --lines 1 gw@$c | sed '1d'
+echo -en "${NC}"
+        tput el
+    echo -en "${On_Black}${BYellow}|_/API:"
+    echo -en "${NC}"
+   echo -en "${On_Blue}${BWhite}"
+fleetctl journal --lines 1 api@$c | sed '1d'
+echo -en "${NC}"
+        tput el
+    #echo -en "${On_White}${BBlack}|  "
+    #    tput el
+    #echo -e "${NC}"
+    #    tput el
+    done
+
+        echo -e "${BYellow}|\\ ${NC} "
+        tput el
+    MYREPOS=($(etcdctl ls --sort ops/net/api 2>/dev/null))
+    objcount=0
+    for r in "${MYREPOS[@]}" ; do
+        rout="$(echo $r | cut -d '/' -f 5)"
+        repocount=$(etcdctl get jobs/done/api/$rout/objects 2>/dev/null) || { repocount=0 ; }
+        objcount=`expr $objcount + $repocount`
+        echo -e "${BGreen}|/${NC}"
+        tput el
+        echo  -e "|_/Dynamic Group ${BCyan}$rout ${NC}=> ${BYellow}https://api.seclab.cloud/$rout ${NC}"
+        tput el
+        apiobjs="($(skey jobs/done/api/$rout))" || { apiobjs="nothing found" ; }
+        for c in "${apiobjs[@]}" ; do
+            lilobj=$(echo $c | tr -d '\n')
+        echo -en " $lilobj "
+        tput el
+        done
+        echo -e "${BRed}"
+        fleetctl list-units -fields unit | grep -e "repo@$rout" -e "bigops@$route" -e "secops@$rout" | tr '\n' ' '
+        echo -en "${NC}"
+        tput el
+    done
+        echo -e " "
+        tput el
+    echo -e "Published ${BWhite}${On_Purple}$objcount total objects${NC} across ${#MYREPOS[@]} Dynamic Groups"
+        tput el
+    echo "$(basename $0) ctrl+c to break"
+        tput ed
+    sleep 4
+    tput rc
+done
+
+
+
+

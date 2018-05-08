@@ -1,0 +1,43 @@
+#!/bin/bash
+#set -eo pipefail
+#ps | grep [j]obwatcher
+#skey jobs/run
+source /.IPS
+
+IFS=$'\n'
+
+if [ -z ${1} ] ; then
+    INUSERS=($(etcdctl ls usr))
+for (( i=0; i<${#INUSERS[@]}; i++ )) ; do
+    uuser="${INUSERS[$i]}"
+    nuser=$(echo $uuser | cut -d '/' -f 3)
+    ninjaserve=($(fleetctl list-units --fields sub,unit,active,machine | grep $nuser | grep ninja))
+    if [[ ${#ninjaserve[@]} -lt 1 ]] && [[ ! -d "/efs/vol/${nuser}" ]] ; then
+		continue
+	elif 
+    		[[ ${#ninjaserve[@]} -lt 1 ]] && [[ -d "/efs/vol/${nuser}" ]] ; then
+        echo -en "${BWhite}${ipscmd} ${CKEY}${nuser}${NC} "
+        echo -e "  :setup but not running "
+    else
+        #echo -e "${CALERT}${nuser}${NC} running."
+        continue
+    fi
+    done
+    exit 1
+fi
+
+jobstart "$$"
+trap "jobtrace '$$'" 0 1 2 3 6
+
+fleetctl start ninja@${1} || { echo "failed to start ninja shell" ; ninja-stop ${1} ; exit 1 ; }
+sleep 18
+#fleetctl start db@${1} || { echo "failed to start db for git" ; ninja-stop ${1} ; exit 1 ; }
+#sleep 15
+#fleetctl start git@${1} || { echo "failed to start local git" ; ninja-stop ${1} ; exit 1 ; }
+#sleep 12
+fleetctl start keystore@${1} || { echo "failed to start keystore" ; ninja-stop ${1} ; exit 1 ; }
+sleep 8
+msgbus " dumping keys for ${1} "
+
+cd /efs/home/${1}/ninja
+dumpkeys usr/${1}

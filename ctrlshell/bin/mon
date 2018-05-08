@@ -1,0 +1,11 @@
+#!/bin/bash
+#resize
+while true 
+do
+	output=$(${@})
+    printf "\033c"
+    date
+    echo -e "$output"
+sleep 2
+done
+

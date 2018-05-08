@@ -1,0 +1,233 @@
+#!/bin/bash
+
+source /efs/deploy/InterdimensionalPortalService
+
+if [ -z "${1}" ] ; then
+echo
+    echo -e "${BWhite}$(basename $0 ${BBlue}<user> ${BGreen}<service>${NC}"
+    echo
+    echo -e "Users are ${BBlue}$(etcdctl ls /usr | cut -d '/' -f 3)${NC} "
+    echo
+    echo -e "Available Services: ${BGreen}$(ls /efs/deploy/home)${NC} "
+    echo
+    exit 1
+fi
+
+if [ -z "${2}" ] ; then
+    echo -e "${BWhite}$(basename $0) ${1} ${BGreen}<service>${NC}"
+    echo
+    echo -e "Services are ${BGreen}$(ls /efs/deploy/home)${NC}" 
+    echo
+    exit 1
+fi
+
+jobstart "$$"
+trap "jobtrace '$$'" 0 1 2 3 6
+echo "${1} buildstate is ${2} "
+echo "in overlay network $overlay"
+
+verify=$(etcdctl get usr/${1}/verify)
+if [ $? -ne 0 ] ; then
+    echo "${1} not verified user"
+    exit 1
+fi
+
+theusr="${1}"
+thesvc="${2}"
+
+
+if [ ! -d "/efs/home/${theusr}/${thesvc}/.aws" ] ; then
+                    echo -e "${CALERT} ${theusr} has no permissions yet ${NC}  "
+                    echo
+
+msgbus "setting up ${thesvc} for ${theusr} "
+
+
+skel="/efs/deploy/home/${thesvc}"
+targetdir="/efs/home/${theusr}"
+mkdir -p ${targetdir}/${thesvc}
+cp -rfv ${skel}/* ${targetdir}/${thesvc}/
+iamcred="${targetdir}/${thesvc}/.aws"
+s3cred="${targetdir}/${thesvc}/.s3cfg"
+renvrc="${targetdir}/${thesvc}/.renvrc"
+posthead="${targetdir}/${thesvc}/head.md"
+postfoot="${targetdir}/${thesvc}/foot.md"
+gitcred="$targetdir/${thesvc}/.git-credentials"
+sed -i "s/BUDDY/${$theusr}/g" $gitcred
+
+sleep 4
+
+mkdir -p /efs/share/hack/${theusr}
+
+# setup iam profile for bucket sync of session 
+echo "set iam policy to session."
+mkdir -p $iamcred
+#aws s3api create-bucket --bucket east1.seclab.ninja.${1} --region us-east-1
+
+aws iam create-user --user-name ${theusr}_${thesvc} > ${iamcred}/${1}.id
+
+cat > ${iamcred}/bucket.json <<EOF
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+		"ec2:DeleteKeyPair",
+		"ec2:ImportKeyPair",
+		"ec2:DescribeKeyPair"
+		],
+            "Resource": ["*"]
+        },
+        {
+            "Effect": "Allow",
+            "Action": ["ec2:*"],
+            "Resource": ["*"]
+        },
+        {
+            "Effect": "Allow",
+            "Action": ["route53:ChangeResourceRecordSets"],
+            "Resource": ["*"]
+        },
+        {
+            "Effect": "Allow",
+            "Action": ["SNS:Publish"],
+            "Resource": ["$(etcdctl get usr/${theusr}/sub)"]
+        },
+        {
+            "Effect": "Allow",
+            "Action": [
+                "s3:ListBucket",
+                "s3:CreateBucket",
+                "s3:PutBucketAcl"
+                ],
+            "Resource": ["arn:aws:s3:::east1.seclab.${thesvc}.${theusr}"]
+        },
+        {
+            "Effect": "Allow",
+            "Action": [
+                "s3:PutObject",
+                "s3:GetObject",
+                "s3:DeleteObject"
+            ],
+            "Resource": ["arn:aws:s3:::east1.seclab.${thesvc}.${theusr}/*"]
+        }
+    ]
+}
+EOF
+
+aws iam put-user-policy --user-name ${theusr}_${thesvc} --policy-name ${theusr}-${thesvc}-policy --policy-document file://${iamcred}/bucket.json
+
+aws iam create-access-key --user-name ${theusr}_${thesvc} > ${iamcred}/${theusr}.key
+accesskey=$(cat ${iamcred}/${theusr}.key | jq -r '.AccessKey | .AccessKeyId')
+accesssecret=$(cat ${iamcred}/${theusr}.key | jq -r '.AccessKey | .SecretAccessKey')
+
+cat > ${iamcred}/credentials <<EOFF
+[default]
+aws_access_key_id = $accesskey
+aws_secret_access_key = $accesssecret
+EOFF
+
+cat > ${iamcred}/config <<EOFFF
+[default]
+output = json
+region = us-east-1
+EOFFF
+
+chmod -R go-rwx ${iamcred}
+
+cat > ${renvrc} <<ENVRC
+hosts=keystore:2379
+ssl=false
+ENVRC
+
+chmod go-rwx ${renvrc}
+
+cat > ${s3cred} <<EOFFFF
+[default]
+access_key = $accesskey
+access_token = 
+add_encoding_exts = 
+add_headers = 
+bucket_location = US
+ca_certs_file = 
+cache_file = 
+check_ssl_certificate = True
+check_ssl_hostname = True
+cloudfront_host = cloudfront.amazonaws.com
+default_mime_type = binary/octet-stream
+delay_updates = False
+delete_after = False
+delete_after_fetch = False
+delete_removed = False
+dry_run = False
+enable_multipart = True
+encoding = UTF-8
+encrypt = False
+expiry_date = 
+expiry_days = 
+expiry_prefix = 
+follow_symlinks = False
+force = False
+get_continue = False
+gpg_command = None
+gpg_decrypt = %(gpg_command)s -d --verbose --no-use-agent --batch --yes --passphrase-fd %(passphrase_fd)s -o %(output_file)s %(input_file)s
+gpg_encrypt = %(gpg_command)s -c --verbose --no-use-agent --batch --yes --passphrase-fd %(passphrase_fd)s -o %(output_file)s %(input_file)s
+gpg_passphrase = 
+guess_mime_type = True
+host_base = s3.amazonaws.com
+host_bucket = %(bucket)s.s3.amazonaws.com
+human_readable_sizes = False
+invalidate_default_index_on_cf = False
+invalidate_default_index_root_on_cf = True
+invalidate_on_cf = False
+kms_key = 
+limit = -1
+limitrate = 0
+list_md5 = False
+log_target_prefix = 
+long_listing = False
+max_delete = -1
+mime_type = 
+multipart_chunk_size_mb = 15
+multipart_max_chunks = 10000
+preserve_attrs = True
+progress_meter = True
+proxy_host = 
+proxy_port = 0
+put_continue = False
+recursive = False
+recv_chunk = 65536
+reduced_redundancy = False
+requester_pays = False
+restore_days = 1
+restore_priority = Standard
+secret_key = $accesssecret
+send_chunk = 65536
+server_side_encryption = False
+signature_v2 = False
+simpledb_host = sdb.amazonaws.com
+skip_existing = False
+socket_timeout = 300
+stats = False
+stop_on_error = False
+storage_class = 
+urlencoding_mode = normal
+use_http_expect = False
+use_https = True
+use_mime_magic = True
+verbosity = WARNING
+website_endpoint = http://%(bucket)s.s3-website-%(location)s.amazonaws.com/
+website_error = 
+website_index = index.html
+EOFFFF
+
+chmod go-rwx ${s3cred}
+echo "$(ls -la /efs/home/${theusr})"
+
+    msgbus "${theusr} setup for ${thesvc} cloud access"
+else
+    echo "${theusr} ${thesvc} home already configured."
+    echo
+fi
+

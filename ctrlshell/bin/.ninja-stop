@@ -1,0 +1,57 @@
+#!/bin/bash
+#set -eo pipefail
+#ps | grep [j]obwatcher
+#skey jobs/run
+source /.IPS
+
+IFS=$'\n'
+
+if [ -z ${1} ] ; then
+    #echo -e " ${BWhite}${ipscmd}${NC} ${CVAL}<buddy>${NC}"
+    INUSERS=($(etcdctl ls usr))
+for (( i=0; i<${#INUSERS[@]}; i++ )) ; do
+    uuser="${INUSERS[$i]}"
+    nuser=$(echo $uuser | cut -d '/' -f 3)
+    ninjaserve=($(fleetctl list-units --fields sub,unit,active,machine | grep $nuser | grep ninja))
+    if [[ ${#ninjaserve[@]} -lt 1 ]] && [[ -d "/efs/vol/${nuser}" ]] ; then
+        #echo -e "${CALERT}${nuser}${NC} setup but ninja shell not running"
+        continue
+    elif 
+        [[ ${#ninjaserve[@]} -lt 1 ]] && [[ ! -d "/efs/vol/${nuser}" ]] ; then
+        continue
+    else
+        echo -en "${CVAL}${nuser}${NC} "
+            userve="${ninjaserve[@]}"
+        echo -e "${userve}"
+        echo -e "|_/${BWhite}${ipscmd}${NC} ${CVAL}${nuser}${NC}"
+        echo
+    fi
+    done
+exit 1
+fi
+
+
+jobstart "$$"
+trap "jobtrace '$$'" 0 1 2 3 6
+
+msgbus " stopping services for ${1}"
+
+fleetctl stop git@${1}
+sleep 5
+fleetctl stop db@${1}
+sleep 5
+fleetctl stop keystore@${1}
+sleep 3
+fleetctl stop ninja@${1}
+sleep 2
+fleetctl destroy git@${1}
+sleep 1
+fleetctl destroy db@${1}
+sleep 2
+fleetctl destroy keystore@${1}
+sleep 2
+fleetctl destroy ninja@${1}
+msgbus " stopped services for ${1}"
+sleep 3
+
+

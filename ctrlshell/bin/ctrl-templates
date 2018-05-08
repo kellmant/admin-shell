@@ -1,0 +1,15 @@
+#!/bin/bash
+#
+# aws ec2 run-instances --cli-input-json file://${file}
+templates="$HOME/templates"
+keys="$HOME/keys"
+mkdir -p ${templates}
+mkdir -p ${keys}
+ARR=("run-instances" "create-vpc" "create-subnet" "create-internet-gateway" "create-route" "create-route-table" "create-security-group")
+for (( i=0; i<${#ARR[@]}; i++ )) ; do
+    run="aws ec2 ${ARR[$i]}"
+    runfile="${templates}/${ARR[$i]}.json"
+    ${run} --generate-cli-skeleton > ${runfile}
+    showjq ${runfile} | cut -d ' ' -f 1 > ${keys}/${ARR[$i]}.var 
+    ${run} --cli-input-json file://${runfile}
+done

@@ -1,0 +1,223 @@
+#!/bin/bash
+# create global ENVS associated array
+. InterdimensionalPortalService
+$jobstart
+
+trap jobcrash 0 1 2 3 6
+
+corecount=1
+inject_name () {
+    dhost="$1"
+    dnsid="$2"
+    IP="$3"
+    zoneid=$(etcdctl get $SKEY/zone/${dnsid}.) 
+    dns=/tmp/DNS.${dhost}.${dnsid}
+    msgbus "dns injection to resolve $dhost.${dnsid} to $IP"
+echo "{" > $dns
+echo "      \"Comment\": \"${dhost}.${dnsid} DNS UPSERT\"," >> $dns
+echo "      \"Changes\": [" >> $dns
+echo "      {" >> $dns
+echo "\"Action\": \"UPSERT\"," >> $dns
+echo "\"ResourceRecordSet\": {" >> $dns
+echo "\"Name\": \"${host}.${dnsid}\"," >> $dns
+echo "\"Type\": \"A\"," >> $dns
+echo "\"TTL\": 60," >> $dns
+echo "\"ResourceRecords\": [" >> $dns
+echo "     {" >> $dns
+echo "\"Value\": \"$IP\"" >> $dns
+echo "       }" >> $dns
+echo "      ]" >> $dns
+echo "     }" >> $dns
+echo "    }" >> $dns
+echo "   ]" >> $dns
+echo "  }" >> $dns
+
+aws route53 change-resource-record-sets --hosted-zone-id $zoneid --change-batch file://$dns
+}
+
+region=$(etcdctl get $ctrlenv/region)
+get_core_list="curl -s https://coreos.com/dist/aws/aws-stable.json"
+jqget_AMIS="jq -r '.[\"${region}\"].hvm'"
+amichecker=$(eval "$get_core_list | $jqget_AMIS")
+AMI="$amichecker"
+clustersize=$(etcdctl get $SKEY/$ipsenv/clustersize)
+disk=$(etcdctl get $SKEY/$ipsenv/disk)
+sizeing=$(etcdctl get $SKEY/$ipsenv/size)
+size=$(etcdctl get $SKEY/size/coreos/${sizeing})
+points=$(etcdctl get $SKEY/points/${size})
+vpcid=$(etcdctl get $SKEY/$ipsenv/vpc)
+disctoken=$(eval "curl -s 'http://discovery.etcd.io/new?size=${clustersize}'")
+mytoken=(`echo ${disctoken} | cut -d / -f 4-`)
+discovery="${mytoken}"
+secgroup=$(etcdctl get $SKEY/$ipsenv/secgroup)
+hostname=$(etcdctl get $SKEY/$ipsenv/host)
+pubdom=$(etcdctl get $SKEY/$ipsenv/public)
+privdom=$(etcdctl get $SKEY/$ipsenv/private)
+template=$(etcdctl get $SKEY/$ipsenv/template)
+# string for the vars
+azcluster=($(etcdctl ls --sort $SKEY/aws/${region}))
+    for (( f=0; f<${#azcluster[@]}; f++ )) ; do
+        subkey="${azcluster[$f]}/$vpc"
+        az=$(echo "${azcluster[$f]}" | cut -d '/' -f 5) 
+        getsub=($(etcdctl ls -r $subkey))
+            for (( s=0; s<${#getsub[@]}; s++ )) ; do
+                efssub=$(etcdctl get ${getsub[$s]})
+                efstarget=$(etcdctl get $SKEY/vol/mnt/$efssub) 
+                    if [ $? -ne 0 ] || [ $corecount -gt $clustersize ] ; then
+                        break
+                    else
+                msgbus "found available zone for ${hostname}-${az} in $region$az ${vpc} $efssub"
+                azone="${region}${az}"
+                host="${hostname}-${az}"
+                tmpfile=/tmp/${ipscmd}.${host}
+                curl -o $tmpfile ${template}
+                sed -i "s/SITUATION/${host}/g" $tmpfile
+                sed -i "s/PRIVDOMAIN/${privdom}/g" $tmpfile
+                sed -i "s/DISCOVERY/${discovery}/g" $tmpfile
+                sed -i "s/EFSMOUNT/${efstarget}/g" $tmpfile
+                msgbus "${TAGIPS} $ipscmd launch template created for $host"
+                InstanceId=$(aws ec2 run-instances --region $region --image-id $AMI --key-name $SKEY --user-data file://${tmpfile} --instance-type $size --subnet-id $efssub --placement AvailabilityZone=${azone} --security-group-ids ${secgroup} --block-device-mappings ${disk} | jq -r '.Instances[].InstanceId')
+                    if [ $? -ne 0 ] ; then
+                        echo "couldn't start instance."
+	                    msgbus "${TAGFAIL} $ipscmd could not start instance in region $region vpc $vpcid,  exiting $BUD from this mess."
+                        exit 1
+                    fi
+	            msgbus "${TAGIPS} $ipscmd initalizing instance $InstanceId in region $region vpc $vpcid,  congrats $BUD"
+	            sleep 12
+                getdef=$(aws ec2 describe-instances --region $region --instance-ids $InstanceId | jq '.Reservations[].Instances[]')
+                declare -A myarray
+                    while IFS="=" read -r key value ; do
+                        myarray[$key]="$value"
+                    done < <(echo "${getdef[@]}" | jq -cr 'to_entries | map("\(.key)=\(.value)") | flatten[]')
+	            msgbus "${TAGIPS} $ipscmd indexing instance $InstanceId for ops"
+
+                    for key in "${!myarray[@]}" ;  do
+                etcdctl set $SKEY/ops/${host}/$key "${myarray[$key]}"
+                    done
+                msgbus "${TAGIPS} Tagging $InstanceId as $host for $BUD"
+                sleep 2
+                aws ec2 create-tags --region $region --tags Key=Name,Value=$host --resources $InstanceId
+                sleep 2
+                aws ec2 create-tags --region $region --tags Key=session,Value=$SKEY --resources $InstanceId
+                blastoff=$(date)
+                msgbus "${TAGIPS} $InstanceId launched at $blastoff, and should be landed in 4 minutes"
+                pubIP=$(etcdctl get $SKEY/ops/${host}/PublicIpAddress) || { msgbus "${TAGSOS} Can't get Public IP for ${host} bailing." ; exit 1 ; }
+                privIP=$(etcdctl get $SKEY/ops/${host}/PrivateIpAddress) || { msgbus "${TAGSOS} Can't get Private IP for ${host} bailing." ; exit 1 ; }
+                inject_name $host $privdom $privIP
+                etcdctl set $SKEY/core/priv/$host "$privIP"
+                sleep 5
+                inject_name $host $pubdom $pubIP
+                etcdctl set $SKEY/core/pub/$host "$pubIP"
+                msgbus "${TAGIPS} $host is $InstanceId at $pubIP "
+                curscore=$(etcdctl get $SKEY/score) || { curscore=0 ; }
+                newscore=$(echo "$curscore + $points" | bc)
+                etcdctl set $SKEY/score "$newscore" &>/dev/null
+                msgbus "${TAGBOSS} SCORE ${scoreit} $BUD has scored $points points launching $corecount of $clustersize members"
+                (( corecount++ ))
+                    fi
+
+            done
+    done
+
+echo ""
+echo " "
+ops-runtime
+getkey
+ops
+sleep 10
+setjob
+sleep 10
+#etcdctl set $SKEY/jobs/start/gwstat "${tag} ${site}"
+#submit_job "appstat ${tag} ${site}"
+#  /ips/ops/gwstat $tag $site &>>/dev/null &!
+
+cluster_add () {
+    cluster=()
+    access="${1}"
+    applb="${2}"
+    appdom="${3}"
+online="${SKEY}/core/$access"
+zoneid=$(etcdctl get $SKEY/zone/${appdom}.)
+activedom=($(etcdctl ls $online))
+           for (( d=0; d<${#activedom[@]}; d++ )) ; do
+            activehosts=($(etcdctl get ${activedom[$d]}))
+            cluster+=("$activehosts")
+            done
+echo "$zoneid for $appdom is ${#cluster[@]} members ${cluster[@]}"
+rrecord="/tmp/DNS.${applb}.${appdom}"
+
+len=${#cluster[@]}
+if [ $len -le 0 ] ; then
+    msgbus "${TAGFAIL} $applb is offline with no sites to send traffic to"
+    exit 1
+elif 
+    [ $len -eq 1 ] ; then
+    count=0
+    last=${cluster[@]}
+else
+    count=`expr $len - 1`
+    last=${cluster[-1]}
+fi
+
+cat > $rrecord <<EOF
+{
+"Comment": "${applb}.${appdom} UPSERT",
+       "Changes": [
+            {
+ "Action": "UPSERT",
+"ResourceRecordSet": {
+"Name": "${applb}.${appdom}",
+"Type": "A",
+"TTL": 60,
+"ResourceRecords": [
+EOF
+for (( c=0; c<$count; c++ ))
+do
+echo "            {\"Value\": \"${cluster[$c]}\"}, " >> $rrecord
+done
+echo "            {\"Value\": \"${last}\"} " >> $rrecord
+cat >> $rrecord <<EOFF
+         ]
+      }
+    }
+  ]
+}
+EOFF
+
+aws route53 change-resource-record-sets --hosted-zone-id ${zoneid} --change-batch file://$rrecord
+
+sleep 2
+    msgbus "${TAGIPS} $applb is balanced to $len active hosts in $access $appdom "
+
+}
+
+sleep 9
+cluster_add pub core seclab.cloud
+sleep 8
+cluster_add priv core east1
+sleep 6
+cluster_add priv registry east1
+sleep 4
+cluster_add priv keystore east1
+
+ssh core.${pubdom} "hostname ; uptime ; fleetctl list-machines -l"
+sleep 3
+ssh core.${pubdom} "hostname ; uptime ; fleetctl list-machines -l"
+sleep 3
+
+ssh core.${pubdom} "hostname ; uptime ; fleetctl list-machines -l"
+sleep 3
+
+cluster_add pub cert securinglabs.online
+sleep 3
+cluster_add pub trust securinglabs.online
+sleep 10
+ssh core.${pubdom} "etcdctl cluster-health"
+sleep 16
+
+submit_job "corestat"
+
+trap 0 1 2 3 6
+$jobstop
+
+exit 0

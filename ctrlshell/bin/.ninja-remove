@@ -1,0 +1,70 @@
+#!/bin/bash
+#set -eo pipefail
+#ps | grep [j]obwatcher
+#skey jobs/run
+source /.IPS
+
+IFS=$'\n'
+
+if [ -z ${1} ] ; then
+    INUSERS=($(etcdctl ls usr))
+for (( i=0; i<${#INUSERS[@]}; i++ )) ; do
+    uuser="${INUSERS[$i]}"
+    nuser=$(echo $uuser | cut -d '/' -f 3)
+    if [ ! -d "/efs/vol/$nuser" ] ; then
+        continue
+    else
+        echo -e " ${BWhite}$ipscmd ${CVAL}${nuser}${NC}"
+        #echo -e "${CVAL}$nuser${NC} active ninja repo "
+    fi
+done
+    exit 1
+fi
+
+jobstart "$$"
+trap "jobtrace '$$'" 0 1 2 3 6
+
+msgbus " stopping services for ${1}"
+
+fleetctl stop git@${1}
+sleep 5
+fleetctl stop db@${1}
+sleep 5
+fleetctl stop keystore@${1}
+sleep 3
+fleetctl stop ninja@${1}
+sleep 2
+fleetctl destroy git@${1}
+sleep 1
+fleetctl destroy db@${1}
+sleep 2
+fleetctl destroy keystore@${1}
+sleep 2
+fleetctl destroy ninja@${1}
+sleep 3
+
+msgbus " cleaning up old files for ${1}"
+#echo " cleaning up irc files for ${1}"
+#rm -rf /efs/home/${1}/irc
+echo " cleaning up ninja files for ${1}"
+rm -rf /efs/home/${1}/ninja
+
+msgbus " reseting git db"
+echo " reseting git db"
+
+ssh core "sudo rm -rf /efs/vol/${1}"
+
+msgbus " removing bucket access"
+echo " removing access"
+accesskey=($(aws iam list-access-keys --user-name ${1} | jq -r '.AccessKeyMetadata[].AccessKeyId'))
+for (( a=0; a<${#accesskey[@]}; a++ )) ; do
+aws iam delete-access-key --access-key ${accesskey[$a]} --user-name ${1}
+done
+
+sleep 4
+aws iam delete-user-policy --user-name ${1} --policy-name ${1}-policy
+
+sleep 4
+aws iam delete-user --user-name ${1}
+
+msgbus "ninja ${1} removed and directories cleaned."

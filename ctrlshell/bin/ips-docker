@@ -1,0 +1,89 @@
+#!/bin/bash
+# create global ENVS associated array
+source /.IPS
+
+region=$(etcdctl get $ctrlenv/region)
+sizeing=$(etcdctl get $ctrlenv/size)
+size=$(etcdctl get size/app/${sizeing})
+points=$(etcdctl get points/${size})
+vpcid=$(etcdctl get $ctrlenv/vpc)
+subid=$(etcdctl get $ctrlenv/subnet)
+hostname=$(etcdctl get $ctrlenv/name)
+staged=$(etcdctl get $ctrlenv/stage)
+
+# locate ami to use for the region
+
+echo "Looking for latest ami to use in $region . . . stand by!"
+AMI=$(aws ec2 describe-images --region $region --owners amazon --filters 'Name=name,Values=amzn-ami-hvm-*.x86_64-gp2' 'Name=state,Values=available' | jq -r '.Images | sort_by(.CreationDate) | last(.[]).ImageId')
+echo "found $AMI "
+
+# check for security group and create if needed
+efssecgrp=$(etcdctl get sec/group/efs/$region)
+descsecgrp=$(aws ec2 describe-security-groups --region $region --group-name ${SKEY})
+    if [ $? -eq 0 ] ; then
+        descsecgrp=$(echo ${descsecgrp[@]} | jq -r '.SecurityGroups[].GroupId')
+        echo "secgroup exists: $descsecgrp"
+        setsecgrp="$descsecgrp $efssecgrp"
+        etcdctl set sec/group/$hostname "$descsecgrp"
+    else
+        crsecgrp=$(aws ec2 create-security-group --region $region --group-name ${SKEY} --description "${ipscmd}-$SKEY" --vpc-id "$vpcid" | jq -r .GroupId)
+        setsecgrp="$crsecgrp $efssecgrp"
+        etcdctl set sec/group/$hostname "$crsecgrp"
+        aws ec2 authorize-security-group-ingress --region $region --group-id $crsecgrp --protocol all --source-group $crsecgrp
+        aws ec2 authorize-security-group-ingress --region $region --group-id $crsecgrp --protocol tcp --port 443 --cidr 0.0.0.0/0
+        aws ec2 authorize-security-group-ingress --region $region --group-id $crsecgrp --protocol tcp --port 80 --cidr 0.0.0.0/0
+        aws ec2 authorize-security-group-ingress --region $region --group-id $crsecgrp --protocol tcp --port 22 --cidr 0.0.0.0/0
+        aws ec2 authorize-security-group-ingress --region $region --group-id $crsecgrp --protocol tcp --port 6667 --cidr 0.0.0.0/0
+        aws ec2 authorize-security-group-ingress --region $region --group-id $crsecgrp --protocol tcp --port 6697 --cidr 0.0.0.0/0
+    fi
+# create init file for startup
+initfile="/tmp/${BUDDY}.$$"
+EFSIP=$(etcdctl get vol/mnt/${region}/${vpcid}/${subid})
+cat > $initfile <<EOF
+#!/bin/bash
+yum update -y
+yum install -y docker
+service docker start
+usermod -a -G docker ec2-user
+mkdir -p /efs
+mount -t nfs4 -o nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2 ${EFSIP}:/ /efs
+EOF
+
+# string for the vars
+InstanceId=$(aws ec2 run-instances --region $region --image-id $AMI --key-name $SKEY --user-data file://${initfile} --instance-type $size --subnet-id $subid --security-group-ids ${setsecgrp} | jq -r '.Instances[].InstanceId')
+    if [ $? -ne 0 ] ; then
+        echo "couldn't start instance."
+	    msgbus "$ipscmd could not start instance in region $region vpc $vpcid,  exiting $BUDDY from this mess."
+        exit 1
+    fi
+msgbus "$ipscmd initalizing instance $InstanceId in region $region vpc $vpcid,  congrats $BUDDY"
+echo "$ipscmd initalizing instance $InstanceId in region $region vpc $vpcid,  congrats $BUDDY"
+echo " waiting for instance to init and come online."
+sleep 15
+getdef=$(aws ec2 describe-instances --region $region --instance-ids $InstanceId | jq '.Reservations[].Instances[]')
+declare -A myarray
+    while IFS="=" read -r key value ; do
+         myarray[$key]="$value"
+    done < <(echo "${getdef[@]}" | jq -cr 'to_entries | map("\(.key)=\(.value)") | flatten[]')
+    for key in "${!myarray[@]}" ;  do
+        etcdctl set $ipsenv/${hostname}/$key "${myarray[$key]}"
+    done
+msgbus " Tagging $InstanceId as $hostname for $BUDDY"
+sleep 2
+aws ec2 create-tags --region $region --tags Key=Name,Value=$hostname --resources $InstanceId
+sleep 2
+aws ec2 create-tags --region $region --tags Key=session,Value=$SKEY --resources $InstanceId
+blastoff=$(date)
+msgbus " $InstanceId launched, and should be landed in 4 minutes"
+pubIP=$(etcdctl get $ipsenv/${hostname}/PublicIpAddress) || { msgbus "Can't get Public IP for ${hostname} bailing." ; exit 1 ; }
+privIP=$(etcdctl get $ipsenv/${hostname}/PrivateIpAddress) || { msgbus " Can't get Private IP for ${hostname} bailing." ; exit 1 ; }
+sleep 5
+# use set_host from IPS var <state> <hostname> <IP>
+set_host $staged $hostname $pubIP
+msgbus "$hostname is $InstanceId at $pubIP "
+curscore=$(etcdctl get score) || { curscore=0 ; }
+newscore=$(echo "$curscore + $points" | bc)
+etcdctl set score "$newscore" &>/dev/null
+msgbus "SCORE!! $BUDDY has scored $points points launching $ipscmd named $hostname in $region "
+
+

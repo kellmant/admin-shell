@@ -1,0 +1,33 @@
+#!/bin/bash
+#set -eo pipefail
+set -a
+source /.IPS
+
+    if [ -z "$2" ] ; then
+        echo "$ipscmd <name> <url of template>"
+        exit
+    fi
+
+tmplt="${HOME}/templates"
+mkdir -p $tmplt
+
+newmsg="$@"
+templatekey=$(echo "$newmsg" | cut -d ' ' -f 1)
+templateget=$(echo "$newmsg" | cut -d ' ' -f 2-)
+curl -s $templateget > ${tmplt}/${templatekey}.json
+mgvar=($(showjq ${tmplt}/${templatekey}.json | cut -d ' ' -f 1 | grep .Parameters. | grep -v Metadata | grep -v Resources))
+	for (( m=0; m<${#mgvar[@]}; m++ )) ; do
+    	mgparm="${mgvar[$m]}"
+    	parm=$(echo "${mgparm}" | cut -d '.' -f 2)
+    	mgkey=$(echo "${mgparm}" | cut -d '.' -f 3)
+    	helpval=$(jq -r .${parm}.${mgkey}.Description ${tmplt}/${templatekey}.json)
+    	defval=$(jq -r .${parm}.${mgkey}.Default ${tmplt}/${templatekey}.json)
+    	    if [ "${defval}" == "null" ] || [ -z ${defval} ] ; then
+                etcdctl set ${ctrlenv}/${templatekey}/${mgkey} "${helpval}"
+	        else
+                etcdctl set ${ctrlenv}/${templatekey}/${mgkey} "${defval}"
+	        fi
+	done
+
+exit
+
