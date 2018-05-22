@@ -1,6 +1,8 @@
 #!/bin/bash
 #set -eo pipefail
 source /.IPS
+jobstart "$$"
+trap "jobtrace '$$'" 0 1 2 3 6
 if [ -z ${1} ] ; then
 formatfile="KEYSTORE"
     echo "dump/KEYSTORE=$(date)" > $formatfile
@@ -9,27 +11,51 @@ else
     formatfile="KEYSTORE.${mykeys}"
     echo "dump/$SKEY/${1}=$(date)" > $formatfile
 fi
+if [ -d /efs/backup ] ; then
+    dweb="/efs/backup"
+else
+    dweb="$HOME"
+fi
+
+tstamped=$(date +%Y%m%d_)
 cnt=0
+echo
+echo "Backing up ${1} keystore . . . "
+echo
 INKEYS=($(etcdctl ls --sort --recursive ${1})) || { echo "${1} not a key" ; exit 1 ; }
 for (( i=0; i<${#INKEYS[@]}; i++ )) ; do
     tfile="${INKEYS[$i]}"
     element=$(echo ${tfile} | cut -d '/' -f 2-)
     dumpchk=$(echo ${tfile} | cut -d '/' -f 2)
-    echo -e "${BBlue} $element ${NC}"
+    #echo -e "${BBlue} $element ${NC}"
+    tput sc
     vals=$(etcdctl get $tfile 2>/dev/null)
     if [ $? -eq 0 ] ; then
         if [ "$dumpchk" == "dump" ] ; then
             continue
         fi
         (( cnt++ ))
-        echo -n " $cnt $vals "
+        tput el
+        echo -en " ${BYellow} Dumping => ${BWhite} $cnt ${NC} "
+        echo -en " ${BGreen} $element ${NC}"
         echo "${element}=${vals}" >> $formatfile
     else
+        tput el
      #   echo "${element}" >> $formatfile
-        echo -n " ${BGreen} $cnt KEYSTORE: $element${NC} "
+        #echo -en "${BWhite} KEY:${BBlue} $element${NC} "
+        echo -en " ${BYellow} Reading => ${BWhite} $cnt ${NC} "
+        echo -en " ${BBlue} $element ${NC}"
      #continue
     fi
-    echo " "
+    #echo -en " ${BYellow}=>${BWhite} $cnt ${NC} "
+    tput rc
 done
-mv $formatfile ${formatfile}.${cnt}
-msgbus " dumped $cnt values to ${formatfile}"
+dumpdest="${dweb}/${formatfile}.${tstamped}${cnt}_values"
+mv -f $formatfile ${dumpdest}
+cp -f ${dumpdest} ${dweb}/${formatfile}.last
+echo -e " Done. Wrote $cnt values from ${1} keys to ${dumpdest}"
+echo
+echo -e " To restore ${1} keys at a later time run ${BWhite}loadkeys ${dumpdest}${NC}"
+echo
+msgbus " dumped $cnt values to ${dumpdest}"
+
