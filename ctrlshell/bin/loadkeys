@@ -18,5 +18,5 @@ for (( i=0; i<${#INKEYS[@]}; i++ )) ; do
     vals=$(echo ${tfile} | cut -d '=' -f 2-)
         (( cnt++ ))
         echo -n " loading $cnt $element "
-        etcdctl set ${element} "${vals}"
+        etcdctl set ${element} "${vals}" &> /dev/null
 done

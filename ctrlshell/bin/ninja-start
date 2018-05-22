@@ -38,7 +38,10 @@ fleetctl start ninja@${1}
 sleep 18
 fleetctl start keystore@${1} 
 sleep 8
-msgbus " dumping keys for ${1} "
+msgbus " ninja shell started for ${1} "
+echo "ninja shell started for ${1}"
 
-cd /efs/home/${1}/node
-dumpkeys usr/${1}
+#msgbus " dumping keys for ${1} "
+
+#cd /efs/home/${1}/node
+#dumpkeys usr/${1}
