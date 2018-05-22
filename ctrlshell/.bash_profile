@@ -239,6 +239,7 @@ alias irc='irssi'
 alias what='cat /etc/motd'
 alias commit='git commit -m'
 alias add='git add'
+alias mods='git diff'
 alias push='git push origin master'
 
 alias rm='rm -i'
